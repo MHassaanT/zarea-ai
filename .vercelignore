@@ -1,0 +1,4 @@
+ai-service/
+whatsapp-backend/
+node_modules/
+*.log

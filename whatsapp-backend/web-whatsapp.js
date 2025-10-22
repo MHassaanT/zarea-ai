@@ -1,0 +1,232 @@
+// web-whatsapp.js
+// Multi-User + Per-User Messages Version (v3)
+
+require("dotenv").config();
+const express = require("express");
+const { Client, LocalAuth } = require("whatsapp-web.js");
+const admin = require("firebase-admin");
+const path = require("path");
+
+const PORT = 4000;
+const RAW_MESSAGES_COLLECTION = "raw_messages";
+const clients = {}; // { userId: clientInstance }
+
+// --- FIREBASE SETUP ---
+let db;
+let rawMessagesCollection;
+
+async function initializeFirebase() {
+  try {
+    const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+    if (!serviceAccountPath) throw new Error("Missing Firebase credentials path.");
+
+    const serviceAccount = require(serviceAccountPath);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+
+    console.log("🔥 Firebase Admin Initialized");
+    db = admin.firestore();
+    rawMessagesCollection = db.collection(RAW_MESSAGES_COLLECTION);
+  } catch (error) {
+    console.error("❌ Firebase Init Error:", error.message);
+    process.exit(1);
+  }
+}
+
+// --- UPDATE SESSION STATUS IN FIRESTORE ---
+async function updateFirestoreStatus(userId, data) {
+  try {
+    if (!db) return console.error("⚠️ Firestore DB reference is null.");
+
+    const docId = userId;
+    const targetDoc = db.collection("whatsapp_sessions").doc(docId);
+
+    await targetDoc.set({ ...data, userId }, { merge: true });
+    console.log(`✅ Firestore Updated [${docId}] → Status=${data.status}`);
+  } catch (err) {
+    console.error("⚠️ Firestore Update Error:", err);
+  }
+}
+
+// --- SAVE RAW MESSAGE ---
+async function saveRawMessage(msg, userId) {
+  try {
+    const phoneNumber = msg.to?.split("@")[0] || "unknown";
+
+    const messageData = {
+      timestamp: admin.firestore.Timestamp.now(),
+      userId, // app user
+      phoneNumber, // their WhatsApp
+      from: msg.from,
+      to: msg.to,
+      type: msg.type,
+      body: msg.body || null,
+      isGroup: !!msg.isGroup,
+      wwebId: msg.id._serialized,
+
+      // AI PROCESSOR QUEUE FIELDS
+      processed: false,
+      isLead: null,
+      replyPending: false,
+      autoReplyText: null,
+    };
+
+    const docRef = await rawMessagesCollection.add(messageData);
+    console.log(
+      `📩 [${userId}] Message saved (${docRef.id.substring(0, 8)}...) from ${msg.from.substring(0, 10)}...`
+    );
+    return docRef;
+  } catch (error) {
+    console.error(`⚠️ Error saving message for ${userId}:`, error);
+  }
+}
+
+// --- AI REPLY EXECUTOR ---
+function startAiReplyExecutor() {
+  if (!db) return;
+  const q = db.collection(RAW_MESSAGES_COLLECTION).where("replyPending", "==", true);
+  console.log(`\n🤖 AI Reply Executor Started`);
+
+  q.onSnapshot(async (snapshot) => {
+    snapshot.docChanges().forEach(async (change) => {
+      if (!["added", "modified"].includes(change.type)) return;
+
+      const doc = change.doc;
+      const message = doc.data();
+      const docId = doc.id;
+
+      if (!message.autoReplyText || !message.from || !message.userId) return;
+
+      const targetClient = clients[message.userId];
+      if (!targetClient) return console.log(`⚠️ No client found for ${message.userId}`);
+
+      try {
+        await targetClient.sendMessage(message.from, message.autoReplyText);
+        await db.collection(RAW_MESSAGES_COLLECTION).doc(docId).update({
+          replyPending: false,
+          replySentAt: admin.firestore.Timestamp.now(),
+        });
+        console.log(`✅ [${message.userId}] AI replied for ${docId}`);
+      } catch (err) {
+        console.error(`❌ AI Reply Error (${docId}):`, err.message);
+      }
+    });
+  });
+}
+
+// --- CLIENT EVENT LISTENERS ---
+function setupClientListeners(client, userId) {
+  client.on("qr", (qr) => {
+    console.log(`🤖 [${userId}] QR generated`);
+    updateFirestoreStatus(userId, {
+      qr,
+      connected: false,
+      status: "awaiting_scan",
+      phoneNumber: null,
+    });
+  });
+
+  client.on("ready", () => {
+    const phone = client.info.wid.user;
+    console.log(`🎉 [${userId}] WhatsApp Ready (${phone})`);
+    updateFirestoreStatus(userId, {
+      qr: null,
+      connected: true,
+      status: "active",
+      phoneNumber: phone,
+    });
+  });
+
+  client.on("message", async (msg) => {
+    if (!msg.fromMe && msg.body && msg.body.trim() !== "") {
+      await saveRawMessage(msg, userId);
+    }
+  });
+
+  client.on("disconnected", async (reason) => {
+    console.log(`🛑 [${userId}] Disconnected: ${reason}`);
+    updateFirestoreStatus(userId, {
+      qr: null,
+      connected: false,
+      status: "disconnected",
+    });
+    delete clients[userId];
+  });
+
+  client.on("auth_failure", (msg) => {
+    console.error(`⚠️ [${userId}] Auth failure:`, msg);
+    updateFirestoreStatus(userId, {
+      qr: null,
+      connected: false,
+      status: "error",
+    });
+  });
+}
+
+// --- CREATE NEW CLIENT ---
+async function createClient(userId) {
+  if (clients[userId]) {
+    console.log(`⚠️ Client for ${userId} already exists.`);
+    return clients[userId];
+  }
+
+  const client = new Client({
+    authStrategy: new LocalAuth({ clientId: userId }),
+    puppeteer: {
+      executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    },
+  });
+
+  setupClientListeners(client, userId);
+  client.initialize();
+  clients[userId] = client;
+  return client;
+}
+
+// --- EXPRESS SERVER ---
+const app = express();
+app.use(express.json());
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET,POST");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  next();
+});
+
+// Start WhatsApp for specific user
+app.post("/start-whatsapp", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) return res.status(400).send("Missing userId");
+
+  try {
+    await createClient(userId);
+    res.status(200).send({ message: `Client started for ${userId}` });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+});
+
+// Disconnect client
+app.post("/disconnect", async (req, res) => {
+  const { userId } = req.body;
+  if (!userId || !clients[userId])
+    return res.status(400).send("Invalid or inactive userId");
+
+  try {
+    await clients[userId].logout();
+    delete clients[userId];
+    res.status(200).send({ message: `Client ${userId} disconnected.` });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+});
+
+// --- INIT EVERYTHING ---
+(async () => {
+  await initializeFirebase();
+  startAiReplyExecutor();
+  app.listen(PORT, () => console.log(`🌍 Server running on http://localhost:${PORT}`));
+})();

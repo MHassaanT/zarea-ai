@@ -1,0 +1,43 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/zarea-whatsapp-service/node_modules
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+/zarea-whatsapp-service/dist
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+/zarea-whatsapp-service/.env
+
+# firebase credentials
+service-account.json
+/zarea-whatsapp-service/service-account.json
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# logs
+logs
+*.log
+*.log.*
