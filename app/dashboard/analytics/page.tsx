@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { TrendingUp, Users, MessageSquare, Target, BarChart3, PieChart } from "lucide-react"
-import Link from "next/Link"
+import Link from "next/link"
 
 export default function AnalyticsPage() {
   return (
