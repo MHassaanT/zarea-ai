@@ -1,5 +1,5 @@
 // web-whatsapp.js
-// Multi-User + Per-User Messages Version (v3)
+// Multi-User + Per-User Messages Version (v3, Production Ready)
 
 require("dotenv").config();
 const express = require("express");
@@ -7,7 +7,7 @@ const { Client, LocalAuth } = require("whatsapp-web.js");
 const admin = require("firebase-admin");
 const path = require("path");
 
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
 const RAW_MESSAGES_COLLECTION = "raw_messages";
 const clients = {}; // { userId: clientInstance }
 
@@ -18,7 +18,8 @@ let rawMessagesCollection;
 async function initializeFirebase() {
   try {
     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-    if (!serviceAccountPath) throw new Error("Missing Firebase credentials path.");
+    if (!serviceAccountPath)
+      throw new Error("Missing Firebase credentials path.");
 
     const serviceAccount = require(serviceAccountPath);
     admin.initializeApp({
@@ -174,7 +175,6 @@ async function createClient(userId) {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: userId }),
     puppeteer: {
-      executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
     },
@@ -189,14 +189,17 @@ async function createClient(userId) {
 // --- EXPRESS SERVER ---
 const app = express();
 app.use(express.json());
+
+// --- CORS CONFIG ---
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET,POST");
+  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-// Start WhatsApp for specific user
+// --- START WHATSAPP SESSION ---
 app.post("/start-whatsapp", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).send("Missing userId");
@@ -209,7 +212,7 @@ app.post("/start-whatsapp", async (req, res) => {
   }
 });
 
-// Disconnect client
+// --- DISCONNECT CLIENT ---
 app.post("/disconnect", async (req, res) => {
   const { userId } = req.body;
   if (!userId || !clients[userId])
@@ -224,9 +227,16 @@ app.post("/disconnect", async (req, res) => {
   }
 });
 
+// --- ROOT CHECK ---
+app.get("/", (req, res) => {
+  res.send("✅ ZareaAI WhatsApp Backend Running Successfully");
+});
+
 // --- INIT EVERYTHING ---
 (async () => {
   await initializeFirebase();
   startAiReplyExecutor();
-  app.listen(PORT, () => console.log(`🌍 Server running on http://localhost:${PORT}`));
+  app.listen(PORT, "0.0.0.0", () =>
+    console.log(`🌍 Server running on port ${PORT}`)
+  );
 })();
