@@ -17,14 +17,21 @@ let rawMessagesCollection;
 
 async function initializeFirebase() {
   try {
-    const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-    if (!serviceAccountPath)
-      throw new Error("Missing Firebase credentials path.");
+    const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+if (!base64Key) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_BASE64 env variable.");
 
-    const serviceAccount = require(serviceAccountPath);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
+let serviceAccount;
+try {
+  const decoded = Buffer.from(base64Key, "base64").toString("utf-8");
+  serviceAccount = JSON.parse(decoded);
+} catch (err) {
+  throw new Error("Invalid Base64 Firebase key — failed to decode/parse JSON.");
+}
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
 
     console.log("🔥 Firebase Admin Initialized");
     db = admin.firestore();
