@@ -5,13 +5,13 @@ import { DashboardLayout } from "@/components/dashboard/dashboard-layout"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { AlertCircle, CheckCircle2, Plus, RefreshCw, Smartphone, Facebook, Instagram, ArrowLeft } from "lucide-react" // ADDED: ArrowLeft
+import { AlertCircle, CheckCircle2, Plus, RefreshCw, Smartphone, Facebook, Instagram, ArrowLeft } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { db, auth } from "@/lib/firebase"
 import { onSnapshot, doc, Timestamp } from "firebase/firestore"
 import { onAuthStateChanged } from "firebase/auth"
 import qrcode from "qrcode"
-import Link from "next/link" // ADDED: Link for navigation
+import Link from "next/link"
 
 // ✅ Real hook to get current user ID from Firebase Auth
 const useGetCurrentUserId = () => {
@@ -110,76 +110,83 @@ export default function ConnectionsPage() {
   }, [whatsappUnsubscribe])
 
   const handleConnect = async (platformId: string) => {
-  if (!currentUserId) {
-    alert("Please log in first.")
-    return
-  }
-
-  if (platformId === "whatsapp") {
-    try {
-      await fetch("/start-whatsapp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUserId }),
-      })
-      console.log(`✅ Requested backend to start client for ${currentUserId}`)
-    } catch (err) {
-      console.error("⚠️ Backend /start-whatsapp failed:", err)
-      alert("Failed to start WhatsApp client on the server.")
+    if (!currentUserId) {
+      alert("Please log in first.")
       return
     }
 
-    setShowSetupDialog(true)
-    setQr(null)
-    setQrDataUrl(null)
+    if (platformId === "whatsapp") {
+      try {
+        // ✅ Use environment variable to point to WhatsApp backend
+        const WHATSAPP_API = process.env.NEXT_PUBLIC_WHATSAPP_API_URL || 'http://localhost:4000'
+        
+        const response = await fetch(`${WHATSAPP_API}/start-whatsapp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: currentUserId }),
+        })
 
-    const ref = doc(db, "whatsapp_sessions", currentUserId)
-    console.log("👀 Subscribing to:", ref.path)
-
-    // stop previous listener if active
-    if (whatsappUnsubscribe) whatsappUnsubscribe()
-
-    const unsub = onSnapshot(
-      ref,
-      (snap) => {
-        console.log("🔥 Snapshot triggered:", snap.exists(), snap.data())
-        const data = snap.data()
-        if (!data) return
-
-        setConnections((prev) => ({
-          ...prev,
-          whatsapp: {
-            ...prev.whatsapp,
-            status: data.status,
-            connected: data.connected,
-            phoneNumber: data.phoneNumber || null,
-          },
-        }))
-
-        if (data.qr) {
-          setQr(data.qr as string)
-        } else {
-          setQr(null)
-          setQrDataUrl(null)
+        if (!response.ok) {
+          throw new Error(`Backend returned ${response.status}`)
         }
 
-        if (data.connected) {
-          setShowSetupDialog(false)
-        }
-      },
-      (error) => {
-        console.error("Firestore Snapshot Error:", error)
-        setConnections((prev) => ({
-          ...prev,
-          whatsapp: { ...prev.whatsapp, connected: false, status: "error" },
-        }))
+        console.log(`✅ Requested backend to start client for ${currentUserId}`)
+      } catch (err) {
+        console.error("⚠️ Backend /start-whatsapp failed:", err)
+        alert("Failed to start WhatsApp client on the server. Please try again.")
+        return
       }
-    )
 
-    setWhatsappUnsubscribe(() => unsub)
+      setShowSetupDialog(true)
+      setQr(null)
+      setQrDataUrl(null)
+
+      const ref = doc(db, "whatsapp_sessions", currentUserId)
+      console.log("👀 Subscribing to:", ref.path)
+
+      // stop previous listener if active
+      if (whatsappUnsubscribe) whatsappUnsubscribe()
+
+      const unsub = onSnapshot(
+        ref,
+        (snap) => {
+          console.log("🔥 Snapshot triggered:", snap.exists(), snap.data())
+          const data = snap.data()
+          if (!data) return
+
+          setConnections((prev) => ({
+            ...prev,
+            whatsapp: {
+              ...prev.whatsapp,
+              status: data.status,
+              connected: data.connected,
+              phoneNumber: data.phoneNumber || null,
+            },
+          }))
+
+          if (data.qr) {
+            setQr(data.qr as string)
+          } else {
+            setQr(null)
+            setQrDataUrl(null)
+          }
+
+          if (data.connected) {
+            setShowSetupDialog(false)
+          }
+        },
+        (error) => {
+          console.error("Firestore Snapshot Error:", error)
+          setConnections((prev) => ({
+            ...prev,
+            whatsapp: { ...prev.whatsapp, connected: false, status: "error" },
+          }))
+        }
+      )
+
+      setWhatsappUnsubscribe(() => unsub)
+    }
   }
-}
-
 
   // generate QR Data URL when raw QR changes
   useEffect(() => {
@@ -193,39 +200,46 @@ export default function ConnectionsPage() {
   }, [qr])
 
   const handleDisconnect = async (platformId: string) => {
-  setConnections((prev) => ({
-    ...prev,
-    [platformId]: { connected: false, status: "disconnected", lastSync: null },
-  }))
+    setConnections((prev) => ({
+      ...prev,
+      [platformId]: { connected: false, status: "disconnected", lastSync: null },
+    }))
 
-  if (!currentUserId) {
-    alert("Please log in first.")
-    return
-  }
-
-  if (platformId === "whatsapp") {
-    if (whatsappUnsubscribe) {
-      whatsappUnsubscribe()
-      setWhatsappUnsubscribe(null)
+    if (!currentUserId) {
+      alert("Please log in first.")
+      return
     }
 
-    try {
-      await fetch("/disconnect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUserId }),
-      })
-      console.log(`✅ Disconnected WhatsApp via backend for ${currentUserId}`)
-    } catch (err) {
-      console.error("⚠️ Backend disconnect failed:", err)
-      setConnections((prev) => ({
-        ...prev,
-        whatsapp: { ...prev.whatsapp, status: "error" },
-      }))
+    if (platformId === "whatsapp") {
+      if (whatsappUnsubscribe) {
+        whatsappUnsubscribe()
+        setWhatsappUnsubscribe(null)
+      }
+
+      try {
+        // ✅ Use environment variable to point to WhatsApp backend
+        const WHATSAPP_API = process.env.NEXT_PUBLIC_WHATSAPP_API_URL || 'http://localhost:4000'
+        
+        const response = await fetch(`${WHATSAPP_API}/disconnect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: currentUserId }),
+        })
+
+        if (!response.ok) {
+          throw new Error(`Backend returned ${response.status}`)
+        }
+
+        console.log(`✅ Disconnected WhatsApp via backend for ${currentUserId}`)
+      } catch (err) {
+        console.error("⚠️ Backend disconnect failed:", err)
+        setConnections((prev) => ({
+          ...prev,
+          whatsapp: { ...prev.whatsapp, status: "error" },
+        }))
+      }
     }
   }
-}
-
 
   if (!currentUserId) {
     return (
