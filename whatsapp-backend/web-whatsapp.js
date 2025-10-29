@@ -3,9 +3,9 @@
 
 require("dotenv").config();
 const express = require("express");
+const cors = require("cors");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const admin = require("firebase-admin");
-const path = require("path");
 
 const PORT = process.env.PORT || 4000;
 const RAW_MESSAGES_COLLECTION = "raw_messages";
@@ -18,20 +18,19 @@ let rawMessagesCollection;
 async function initializeFirebase() {
   try {
     const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-if (!base64Key) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_BASE64 env variable.");
+    if (!base64Key) throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_BASE64 env variable.");
 
-let serviceAccount;
-try {
-  const decoded = Buffer.from(base64Key, "base64").toString("utf-8");
-  serviceAccount = JSON.parse(decoded);
-} catch (err) {
-  throw new Error("Invalid Base64 Firebase key — failed to decode/parse JSON.");
-}
+    let serviceAccount;
+    try {
+      const decoded = Buffer.from(base64Key, "base64").toString("utf-8");
+      serviceAccount = JSON.parse(decoded);
+    } catch (err) {
+      throw new Error("Invalid Base64 Firebase key — failed to decode/parse JSON.");
+    }
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
-
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
 
     console.log("🔥 Firebase Admin Initialized");
     db = admin.firestore();
@@ -195,27 +194,28 @@ async function createClient(userId) {
 
 // --- EXPRESS SERVER ---
 const app = express();
-app.use(express.json());
 
-// --- CORS CONFIG ---
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.sendStatus(200);
-  next();
-});
+// ✅ CORS Configuration - Allow your frontend
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*', // Update this in production
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.use(express.json());
 
 // --- START WHATSAPP SESSION ---
 app.post("/start-whatsapp", async (req, res) => {
   const { userId } = req.body;
-  if (!userId) return res.status(400).send("Missing userId");
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
 
   try {
     await createClient(userId);
-    res.status(200).send({ message: `Client started for ${userId}` });
+    res.status(200).json({ message: `Client started for ${userId}` });
   } catch (err) {
-    res.status(500).send({ error: err.message });
+    console.error("❌ Error starting client:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -223,27 +223,34 @@ app.post("/start-whatsapp", async (req, res) => {
 app.post("/disconnect", async (req, res) => {
   const { userId } = req.body;
   if (!userId || !clients[userId])
-    return res.status(400).send("Invalid or inactive userId");
+    return res.status(400).json({ error: "Invalid or inactive userId" });
 
   try {
     await clients[userId].logout();
     delete clients[userId];
-    res.status(200).send({ message: `Client ${userId} disconnected.` });
+    res.status(200).json({ message: `Client ${userId} disconnected.` });
   } catch (err) {
-    res.status(500).send({ error: err.message });
+    console.error("❌ Error disconnecting client:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// --- ROOT CHECK ---
+// --- HEALTH CHECK ---
 app.get("/", (req, res) => {
-  res.send("✅ ZareaAI WhatsApp Backend Running Successfully");
+  res.json({ 
+    status: "✅ ZareaAI WhatsApp Backend Running",
+    activeClients: Object.keys(clients).length,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // --- INIT EVERYTHING ---
 (async () => {
   await initializeFirebase();
   startAiReplyExecutor();
-  app.listen(PORT, "0.0.0.0", () =>
-    console.log(`🌍 Server running on port ${PORT}`)
-  );
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`\n🌍 WhatsApp Backend Server Running`);
+    console.log(`📍 Port: ${PORT}`);
+    console.log(`🔗 CORS enabled for: ${process.env.FRONTEND_URL || '*'}`);
+  });
 })();
