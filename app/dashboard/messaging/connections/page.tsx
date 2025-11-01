@@ -138,7 +138,7 @@ export default function MessagingPage() {
   const [searchQuery, setSearchQuery] = useState("")
 
   /**
-   * UPDATED Firestore Data Fetching: Target 'raw_messages', filter by isLead=true and userId, and group by contact.
+   * UPDATED Firestore Data Fetching: Added debug logic for empty snapshot.
    */
   useEffect(() => {
     if (!user?.uid) {
@@ -161,6 +161,16 @@ export default function MessagingPage() {
       const unsub = onSnapshot(
         q,
         (snapshot) => {
+          
+          // ************ DEBUG LOGIC ADDED HERE ************
+          if (snapshot.empty) {
+            console.log(`DEBUG: Firestore query returned zero documents matching isLead=true and userId=${user.uid}. Check your Firestore data and security rules.`);
+            setConversations([]);
+            setSelectedConversation(null);
+            return;
+          }
+          // ************************************************
+          
           // Map to hold the LATEST RawMessage for each unique contact ('from' field)
           const leadMap = new Map<string, RawMessage & { id: string }>();
 
@@ -214,7 +224,7 @@ export default function MessagingPage() {
     } catch (err) {
       console.error("Firestore listener setup failed:", err)
     }
-  }, [user?.uid, selectedConversation?.id]) // Added selectedConversation?.id to re-run effect if the ID changes
+  }, [user?.uid, selectedConversation?.id]) 
 
   // Platform stats calculation
   const platformKeys = ["whatsapp", "messenger", "instagram"]
