@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { DashboardLayout } from "@/components/dashboard/dashboard-layout"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,55 +26,44 @@ import {
   AlertTriangle,
   Zap,
   Link,
+  Users, // Added for Qualified Leads icon
 } from "lucide-react"
 
 import { collection, query, where, onSnapshot, orderBy } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useAuth } from "@/lib/auth-context"
 
-type MessageItem = {
-  id: string | number
-  sender: "contact" | "consultant"
-  message: string
-  timestamp: string
+// --- NEW/UPDATED TYPES ---
+
+type QualifiedLead = {
+  id: string
+  userId: string
+  phoneNumber: string
+  contactId: string
+  rawMessageId: string
+  intent: string
+  priority: "High" | "Medium" | "Low"
+  messageCount: number
+  name: string
+  email: string
+  lastMessageBody: string
+  autoReplyText: string
+  timestamp: string // String representation of the timestamp
 }
 
-type Conversation = {
-  id: string | number
-  platform: string
-  contact: string
-  avatar?: string
-  lastMessage?: string
-  timestamp?: string
-  unread?: number
-  leadScore?: number
-  classification?: string
-  status?: string
-  visaType?: string
-  urgency?: string
-  location?: string
-  aiAnalysis?: {
-    intent?: string
-    keyPhrases?: string[]
-    sentiment?: string
-    followUpRecommendation?: string
-    confidence?: number
-  }
-  messages?: MessageItem[]
-  phoneNumber?: string
-  rawMessageId?: string
-}
+// Conversation type is no longer needed in its original form, 
+// but we keep a simplified one for the "Chat" panel if we were to show messages.
+// We'll use QualifiedLead for the main data.
 
 export default function MessagingPage() {
   const { user } = useAuth()
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
+  const [qualifiedLeads, setQualifiedLeads] = useState<QualifiedLead[]>([])
+  const [selectedLead, setSelectedLead] = useState<QualifiedLead | null>(null)
   const [messageInput, setMessageInput] = useState("")
-  const [filterStatus, setFilterStatus] = useState("all")
+  const [filterPriority, setFilterPriority] = useState("all")
   const [searchQuery, setSearchQuery] = useState("")
 
-  // Firestore Data Fetching: CORRECTED to fetch from 'leads' collection
-  // page.tsx - Inside MessagingPage component - The final, correct version
+  // --- FIRESTORE DATA FETCHING FOR QUALIFIED LEADS ---
 
   useEffect(() => {
     if (!user?.uid) {
@@ -83,57 +72,58 @@ export default function MessagingPage() {
     }
 
     try {
-      // 1. Target the 'leads' collection
+      // 1. Target the 'qualified_leads' collection
       const q = query(
-        collection(db, "leads"),
+        collection(db, "qualified_leads"),
         // 2. Filter by the authenticated user's ID
         where("userId", "==", user.uid),
-        // 3. Include the correct ordering (requires the DESC index in Firestore!)
+        // 3. Order by timestamp
         orderBy("timestamp", "desc")
       )
       
-      console.log("Starting Firestore listener for leads/ on UID:", user.uid)
+      console.log("Starting Firestore listener for qualified_leads on UID:", user.uid)
 
       const unsub = onSnapshot(
         q,
         (snapshot) => {
-          // You should now see a number > 0 here!
-          console.log(`Received ${snapshot.docs.length} lead documents.`) 
+          console.log(`Received ${snapshot.docs.length} qualified lead documents.`) 
           
-          const transformedConversations: Conversation[] = snapshot.docs.map((d) => {
-            const lead = d.data() as any
-            const id = d.id
-            const timestampString = lead.timestamp || new Date().toLocaleString() 
+          const leads: QualifiedLead[] = snapshot.docs.map((d) => {
+            const data = d.data() as any
+            const timestamp = data.timestamp?.toDate ? data.timestamp.toDate().toLocaleString() : (data.timestamp?.value || new Date().toLocaleString())
             
-            // ... (rest of the mapping logic remains the same)
             return {
-              id: id,
-              platform: "whatsapp", 
-              contact: lead.phoneNumber || lead.contactId || "Unknown Contact",
-              // ... other fields
-              lastMessage: lead.firstMessageBody || "No message content",
-              timestamp: timestampString,
-              // ...
-              messages: [],
-            } as Conversation
+              id: d.id,
+              userId: data.userId,
+              phoneNumber: data.phoneNumber,
+              contactId: data.contactId,
+              rawMessageId: data.rawMessageId,
+              intent: data.intent || "Unknown Intent",
+              priority: data.priority || "Medium",
+              messageCount: data.messageCount || 1,
+              name: data.name || data.phoneNumber || "Unknown Contact",
+              email: data.email || "No Email",
+              lastMessageBody: data.lastMessageBody || "No message content",
+              autoReplyText: data.autoReplyText || "No auto-reply sent.",
+              timestamp: timestamp,
+            } as QualifiedLead
           })
 
-          setConversations(transformedConversations)
+          setQualifiedLeads(leads)
           
-          // ... (selected conversation update logic remains the same)
-          if (selectedConversation) {
-             const updatedSelected = transformedConversations.find(c => c.id === selectedConversation.id)
+          // Update selected lead if it exists in the new list
+          if (selectedLead) {
+             const updatedSelected = leads.find(l => l.id === selectedLead.id)
              if (updatedSelected) {
-                 setSelectedConversation(prev => ({ 
-                     ...(prev as Conversation),
-                     ...updatedSelected
-                 }))
+                 setSelectedLead(updatedSelected)
+             } else {
+                // Deselect if the lead was removed/filtered on the backend
+                setSelectedLead(null)
              }
           }
         },
         (err) => {
-          // This should now only log if there's a real connection error
-          console.error("Error listening to leads collection:", err)
+          console.error("Error listening to qualified_leads collection:", err)
         }
       )
 
@@ -143,127 +133,115 @@ export default function MessagingPage() {
     }
   }, [user?.uid])
 
-  // Platform stats calculation
-  const platformKeys = ["whatsapp", "messenger", "instagram"]
-  const getPlatformDisplay = (p: string) => p.charAt(0).toUpperCase() + p.slice(1)
+  // --- PLATFORM STATS (Simplified/Refactored for Qualified Leads) ---
+  // The original 'platform' logic is no longer relevant, but we keep the card structure
+  // and adapt it to show qualified leads stats.
 
-  const platformStats = platformKeys.map((p) => {
-    if (p === "whatsapp") {
-      const totalLeads = conversations.length
-      const leads = conversations.filter((c) => c.platform === p).length 
-      const conversion = totalLeads ? `100% (All are Leads)` : "—"
-      return {
-        platform: getPlatformDisplay(p),
-        messages: totalLeads, 
-        leads: totalLeads,
-        conversion,
-        icon: MessageSquare,
-        color: "bg-gray-500",
-        key: p,
-      }
-    } else {
-      return {
-        platform: getPlatformDisplay(p),
-        messages: "Coming Soon",
-        leads: "Coming Soon",
-        conversion: "—",
-        icon: MessageSquare,
-        color: "bg-gray-300",
-        key: p,
-      }
+  const totalLeads = qualifiedLeads.length
+  const highPriorityLeads = qualifiedLeads.filter(l => l.priority === "High").length
+  const highPriorityRatio = totalLeads > 0 ? `${Math.round((highPriorityLeads / totalLeads) * 100)}%` : "—"
+
+  const platformStats = [
+    {
+      platform: "Qualified Leads",
+      data: totalLeads, 
+      subtext: `${totalLeads} Total`,
+      conversion: "100% Leads",
+      icon: Users,
+      color: "bg-green-600",
+      key: "qualified_total",
+    },
+    {
+      platform: "High Priority",
+      data: highPriorityLeads,
+      subtext: `${highPriorityRatio} of total`,
+      conversion: highPriorityRatio,
+      icon: AlertTriangle,
+      color: "bg-red-500",
+      key: "qualified_high",
+    },
+    {
+      platform: "Automation Success",
+      data: "Data Driven",
+      subtext: "Coming Soon",
+      conversion: "—",
+      icon: Bot,
+      color: "bg-indigo-500",
+      key: "automation",
     }
-  })
+  ]
+  
 
-  // Filtering/searching
-  const filteredConversations = conversations.filter((conv) => {
+  // --- FILTERING/SEARCHING ---
+  const filteredLeads = qualifiedLeads.filter((lead) => {
     const q = searchQuery.trim().toLowerCase()
     const matchesSearch =
       !q ||
-      (conv.contact ?? "").toLowerCase().includes(q) ||
-      (conv.lastMessage ?? "").toLowerCase().includes(q)
+      lead.name.toLowerCase().includes(q) ||
+      lead.lastMessageBody.toLowerCase().includes(q) ||
+      lead.intent.toLowerCase().includes(q)
 
     const matchesFilter =
-      filterStatus === "all" ||
-      (filterStatus === "unread" && (conv.unread ?? 0) > 0) ||
-      (filterStatus === "leads" && (conv.leadScore ?? 0) >= 60) ||
-      (filterStatus === "urgent" && (conv.urgency ?? '').toLowerCase() === "high")
+      filterPriority === "all" ||
+      lead.priority.toLowerCase() === filterPriority
 
     return matchesSearch && matchesFilter
   })
 
-  // UI helpers
-  const getPlatformIcon = (platform: string) => {
-    switch (platform) {
-      case "whatsapp":
-        return "💬"
-      case "messenger":
-        return "📘"
-      case "instagram":
-        return "📷"
-      default:
-        return "💬"
+  // --- UI HELPERS (Refactored/Simplified) ---
+
+  const getPriorityColor = (priority: string) => {
+    switch(priority.toLowerCase()) {
+        case "high": return "bg-red-100 text-red-800 border-red-200"
+        case "medium": return "bg-yellow-100 text-yellow-800 border-yellow-200"
+        default: return "bg-green-100 text-green-800 border-green-200"
     }
   }
 
-  const getLeadScoreColor = (score?: number) => {
-    const s = score ?? 0
-    if (s >= 80) return "bg-red-100 text-red-800 border-red-200"
-    if (s >= 60) return "bg-yellow-100 text-yellow-800 border-yellow-200"
-    return "bg-gray-100 text-gray-800 border-gray-200"
-  }
-
-  const getUrgencyIcon = (urgency?: string) => {
-    switch (urgency) {
-      case "high":
-        return <AlertTriangle className="h-3 w-3 text-red-500" />
-      case "medium":
-        return <Clock className="h-3 w-3 text-yellow-500" />
-      default:
-        return <CheckCircle2 className="h-3 w-3 text-green-500" />
+  const getPriorityIcon = (priority: string) => {
+    switch(priority.toLowerCase()) {
+        case "high": return <AlertTriangle className="h-3 w-3 text-red-500" />
+        case "medium": return <Clock className="h-3 w-3 text-yellow-500" />
+        default: return <CheckCircle2 className="h-3 w-3 text-green-500" />
     }
   }
 
-  // Send message function (unchanged)
+  const getPlatformIcon = (contactId: string) => {
+    if (contactId.includes("whatsapp")) return "💬"
+    if (contactId.includes("messenger")) return "📘"
+    if (contactId.includes("instagram")) return "📷"
+    return "💬"
+  }
+
+
+  // --- SEND MESSAGE FUNCTION (Simplified - UI Only) ---
   const handleSendMessage = () => {
-    if (!messageInput.trim() || !selectedConversation) return
+    if (!messageInput.trim() || !selectedLead) return
 
-    const newMessage: MessageItem = {
-      id: Date.now(),
-      sender: "consultant",
-      message: messageInput.trim(),
-      timestamp: new Date().toLocaleString(),
-    }
-
-    // Update conversations array immutably
-    setConversations((prev) =>
-      prev.map((conv) =>
-        conv.id === selectedConversation.id
-          ? {
-              ...conv,
-              messages: [...(conv.messages ?? []), newMessage],
-              lastMessage: newMessage.message,
-              timestamp: "Just now",
-            }
-          : conv
-      )
-    )
-
-    // Keep selectedConversation in sync for immediate UI
-    setSelectedConversation((prev) =>
-      prev
-        ? {
-            ...prev,
-            messages: [...(prev.messages ?? []), newMessage],
-            lastMessage: newMessage.message,
-            timestamp: "Just now",
-          }
-        : prev
-    )
-
-    // TODO: call your backend API to actually send message via WhatsApp/Gemini
-    console.log("Sending message (UI-only):", newMessage, "to conversation:", selectedConversation.id)
+    // In a real app, this would call an API to send a message via the platform (e.g., WhatsApp)
+    console.log("Sending follow-up message (UI-only):", messageInput.trim(), "to lead:", selectedLead.id)
     setMessageInput("")
   }
+
+  // --- DUMMY MESSAGE HISTORY FOR DISPLAY (Based on qualified_leads data) ---
+  const leadMessages = useMemo(() => {
+    if (!selectedLead) return []
+    // Simulating a minimal conversation history based on the available data
+    return [
+        {
+            id: 1,
+            sender: "contact",
+            message: selectedLead.lastMessageBody,
+            timestamp: selectedLead.timestamp,
+        },
+        {
+            id: 2,
+            sender: "consultant",
+            message: selectedLead.autoReplyText,
+            timestamp: new Date().toLocaleString(), // Use current time for the auto-reply
+        }
+    ]
+  }, [selectedLead])
 
   return (
     <DashboardLayout>
@@ -271,8 +249,8 @@ export default function MessagingPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">Lead Inbox</h1>
-            <p className="text-muted-foreground">All your leads from connected platforms</p>
+            <h1 className="text-3xl font-bold text-foreground">Lead Qualification</h1>
+            <p className="text-muted-foreground">Focus on your most qualified, high-intent leads</p>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" size="sm" asChild>
@@ -284,7 +262,7 @@ export default function MessagingPage() {
             <Button variant="outline" size="sm" asChild>
               <a href="/dashboard/messaging/follow-ups">
                 <Bot className="h-4 w-4 mr-2" />
-                Follow-ups
+                Automation
               </a>
             </Button>
             <Button size="sm">
@@ -294,7 +272,7 @@ export default function MessagingPage() {
           </div>
         </div>
 
-        {/* Platform Stats */}
+        {/* Platform Stats (Now Lead Stats) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {platformStats.map((stat) => (
             <Card key={stat.key}>
@@ -305,105 +283,95 @@ export default function MessagingPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{stat.messages}</div>
+                <div className="text-2xl font-bold">{stat.data}</div>
                 <p className="text-xs text-muted-foreground">
-                  {stat.leads} leads • {stat.conversion} conversion
+                  {stat.subtext}
                 </p>
               </CardContent>
             </Card>
           ))}
         </div>
 
-        {/* Main Messaging Interface */}
+        {/* Main Interface: Qualified Leads List and Lead Detail */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Conversations List */}
+          
+          {/* 1. Qualified Leads List */}
           <Card className="lg:col-span-1">
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle>Conversations</CardTitle>
-                <Badge variant="secondary">{filteredConversations.length}</Badge>
+                <CardTitle>Qualified Leads</CardTitle>
+                <Badge variant="secondary">{filteredLeads.length}</Badge>
               </div>
               <div className="space-y-2">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search conversations..."
+                    placeholder="Search by name, intent, or message..."
                     className="pl-10"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
-                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <Select value={filterPriority} onValueChange={setFilterPriority}>
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Filter by Priority" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Conversations</SelectItem>
-                    <SelectItem value="unread">Unread Messages</SelectItem>
-                    <SelectItem value="leads">High-Quality Leads</SelectItem>
-                    <SelectItem value="urgent">Urgent Inquiries</SelectItem>
+                    <SelectItem value="all">All Qualified Leads</SelectItem>
+                    <SelectItem value="high">High Priority</SelectItem>
+                    <SelectItem value="medium">Medium Priority</SelectItem>
+                    <SelectItem value="low">Low Priority</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="space-y-1">
-                {filteredConversations.length === 0 ? (
+              <div className="space-y-1 max-h-[600px] overflow-y-auto">
+                {filteredLeads.length === 0 ? (
                   <div className="p-6 text-center text-sm text-muted-foreground">
-                    {user ? "No conversations yet — messages will appear here automatically." : "Please sign in to view messages."}
+                    {user ? "No qualified leads found with these filters." : "Please sign in to view leads."}
                   </div>
                 ) : (
-                  filteredConversations.map((conversation) => (
+                  filteredLeads.map((lead) => (
                     <div
-                      key={conversation.id}
+                      key={lead.id}
                       className={`p-4 cursor-pointer hover:bg-muted/50 border-l-4 transition-colors ${
-                        selectedConversation?.id === conversation.id ? "bg-muted border-l-primary" : "border-l-transparent"
+                        selectedLead?.id === lead.id ? "bg-muted border-l-primary" : "border-l-transparent"
                       }`}
-                      onClick={() => setSelectedConversation(conversation)}
+                      onClick={() => setSelectedLead(lead)}
                     >
                       <div className="flex items-start gap-3">
                         <div className="relative">
                           <Avatar className="h-10 w-10">
-                            <AvatarImage src={conversation.avatar || "/placeholder.svg"} />
+                            <AvatarImage src="/placeholder.svg" />
                             <AvatarFallback>
-                              {conversation.contact
-                                ? conversation.contact
+                              {lead.name
+                                ? lead.name
                                     .split(" ")
                                     .map((n) => n[0])
                                     .join("")
                                 : "?"}
                             </AvatarFallback>
                           </Avatar>
-                          <div className="absolute -bottom-1 -right-1 text-sm">{getPlatformIcon(conversation.platform)}</div>
+                          <div className="absolute -bottom-1 -right-1 text-sm">{getPlatformIcon(lead.contactId)}</div>
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                              <p className="font-medium text-sm truncate">{conversation.contact ?? "Unknown"}</p>
-                              {/* CONDITIONAL RENDERING */}
-                              {conversation.urgency && getUrgencyIcon(conversation.urgency)}
+                              <p className="font-medium text-sm truncate">{lead.name}</p>
+                              {getPriorityIcon(lead.priority)}
                             </div>
-                            <div className="flex items-center gap-1">
-                              {((conversation.unread ?? 0) > 0) && (
-                                <Badge variant="destructive" className="h-5 w-5 p-0 text-xs">
-                                  {conversation.unread}
-                                </Badge>
-                              )}
-                              <span className="text-xs text-muted-foreground">{conversation.timestamp ?? ""}</span>
-                            </div>
+                            <span className="text-xs text-muted-foreground">{lead.timestamp.split(',')[0] ?? ""}</span>
                           </div>
-                          <p className="text-sm text-muted-foreground truncate line-clamp-2">{conversation.lastMessage ?? "No messages yet"}</p>
+                          <p className="text-sm text-muted-foreground truncate line-clamp-1">{lead.lastMessageBody}</p>
                           
-                          {/* CONDITIONAL RENDERING */}
                           <div className="flex items-center gap-2 mt-2">
-                            {conversation.leadScore !== undefined && conversation.leadScore !== null && (
-                                <Badge className={`text-xs ${getLeadScoreColor(conversation.leadScore)}`}>
-                                  {conversation.leadScore}% Lead Score
-                                </Badge>
-                            )}
-                            {conversation.visaType && (
+                            <Badge className={`text-xs ${getPriorityColor(lead.priority)}`}>
+                              {lead.priority} Priority
+                            </Badge>
+                            {lead.intent && (
                                 <Badge variant="outline" className="text-xs">
-                                  {conversation.visaType} visa
+                                  {lead.intent}
                                 </Badge>
                             )}
                           </div>
@@ -416,18 +384,18 @@ export default function MessagingPage() {
             </CardContent>
           </Card>
 
-          {/* Chat Interface */}
+          {/* 2. Lead Detail & Follow-up Interface (replaces Chat Interface) */}
           <Card className="lg:col-span-2">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {selectedConversation ? (
+                  {selectedLead ? (
                     <>
                       <Avatar>
-                        <AvatarImage src={selectedConversation.avatar || "/placeholder.svg"} />
+                        <AvatarImage src="/placeholder.svg" />
                         <AvatarFallback>
-                          {selectedConversation.contact
-                            ? selectedConversation.contact
+                          {selectedLead.name
+                            ? selectedLead.name
                                 .split(" ")
                                 .map((n) => n[0])
                                 .join("")
@@ -435,37 +403,31 @@ export default function MessagingPage() {
                         </AvatarFallback>
                       </Avatar>
                       <div>
-                        <CardTitle className="text-lg">{selectedConversation.contact ?? "Unknown"}</CardTitle>
-                        <CardDescription className="flex items-center gap-2">
-                          {getPlatformIcon(selectedConversation.platform)} {selectedConversation.platform}
+                        <CardTitle className="text-lg">{selectedLead.name}</CardTitle>
+                        <CardDescription className="flex flex-col md:flex-row md:items-center gap-1 md:gap-2">
+                          <span className="flex items-center gap-1">
+                            {getPlatformIcon(selectedLead.contactId)} {selectedLead.phoneNumber}
+                          </span>
                           
-                          {/* CONDITIONAL RENDERING */}
-                          {selectedConversation.leadScore !== undefined && selectedConversation.leadScore !== null && (
-                            <Badge className={`ml-2 ${getLeadScoreColor(selectedConversation.leadScore)}`}>
-                              {selectedConversation.leadScore}% Lead Score
-                            </Badge>
-                          )}
+                          <Badge className={`ml-0 md:ml-2 text-xs ${getPriorityColor(selectedLead.priority)}`}>
+                            {selectedLead.priority} Priority
+                          </Badge>
                           
-                          {/* CONDITIONAL RENDERING */}
-                          {(selectedConversation.visaType || selectedConversation.location) && (
-                            <Badge variant="outline" className="text-xs">
-                              {selectedConversation.visaType ?? "—"} • {selectedConversation.location ?? "—"}
-                            </Badge>
-                          )}
+                          <Badge variant="outline" className="text-xs">
+                            {selectedLead.intent}
+                          </Badge>
                         </CardDescription>
                       </div>
                     </>
                   ) : (
-                    <CardTitle>Select a conversation</CardTitle>
+                    <CardTitle>Select a Qualified Lead</CardTitle>
                   )}
                 </div>
-                {selectedConversation && (
+                {selectedLead && (
                   <div className="flex gap-2">
                     <Button variant="outline" size="sm">
-                      <Star className="h-4 w-4" />
-                    </Button>
-                    <Button variant="outline" size="sm">
-                      <Calendar className="h-4 w-4" />
+                      <Calendar className="h-4 w-4 mr-2" />
+                      Schedule Call
                     </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -476,15 +438,15 @@ export default function MessagingPage() {
                       <DropdownMenuContent>
                         <DropdownMenuItem>
                           <UserPlus className="h-4 w-4 mr-2" />
-                          Add to CRM
+                          Convert to Client
                         </DropdownMenuItem>
                         <DropdownMenuItem>
                           <Archive className="h-4 w-4 mr-2" />
-                          Archive
+                          Archive Lead
                         </DropdownMenuItem>
                         <DropdownMenuItem className="text-destructive">
                           <Trash2 className="h-4 w-4 mr-2" />
-                          Delete
+                          Dismiss
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -493,64 +455,46 @@ export default function MessagingPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {selectedConversation ? (
+              {selectedLead ? (
                 <div className="space-y-4">
                   
-                  {/* CONDITIONAL RENDERING: AI Analysis Panel */}
-                  {selectedConversation.aiAnalysis?.intent || selectedConversation.aiAnalysis?.followUpRecommendation ? (
-                    <Card className="bg-blue-50 border-blue-200">
-                      <CardContent className="p-4">
-                        <div className="flex items-start gap-3">
-                          <div className="p-2 bg-blue-100 rounded-full">
-                            <Bot className="h-4 w-4 text-blue-600" />
-                          </div>
-                          <div className="flex-1">
-                            <h4 className="font-medium text-blue-900">AI Analysis</h4>
-                            <div className="text-sm text-blue-700 mt-1 space-y-1">
-                              {selectedConversation.aiAnalysis?.intent && (
-                                <p>
-                                  <strong>Intent:</strong> {selectedConversation.aiAnalysis.intent}
-                                </p>
-                              )}
-                              {selectedConversation.aiAnalysis?.keyPhrases?.length && (
-                                <p>
-                                  <strong>Key Phrases:</strong> {selectedConversation.aiAnalysis.keyPhrases.join(", ")}
-                                </p>
-                              )}
-                              {selectedConversation.aiAnalysis?.followUpRecommendation && (
-                                <p>
-                                  <strong>Recommendation:</strong> {selectedConversation.aiAnalysis.followUpRecommendation}
-                                </p>
-                              )}
-                              {selectedConversation.aiAnalysis?.confidence !== undefined && (
-                                <p>
-                                  <strong>Confidence:</strong> {selectedConversation.aiAnalysis.confidence}%
-                                </p>
-                              )}
-                            </div>
-                            <div className="flex gap-2 mt-3">
-                              <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
-                                Send Follow-up Template
-                              </Button>
-                              <Button variant="outline" size="sm">
-                                Schedule Call
-                              </Button>
-                              <Button variant="outline" size="sm">
-                                Add to CRM
-                              </Button>
-                            </div>
+                  {/* Lead Information Panel */}
+                  <Card className="bg-blue-50 border-blue-200">
+                    <CardContent className="p-4">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2 bg-blue-100 rounded-full">
+                          <Zap className="h-4 w-4 text-blue-600" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-medium text-blue-900">Qualification Summary</h4>
+                          <div className="text-sm text-blue-700 mt-1 space-y-1">
+                            <p>
+                              <strong>Name:</strong> {selectedLead.name}
+                            </p>
+                            <p>
+                              <strong>Email:</strong> {selectedLead.email}
+                            </p>
+                            <p>
+                              <strong>Intent:</strong> {selectedLead.intent}
+                            </p>
+                            <p>
+                              <strong>Priority:</strong> <span className="font-semibold">{selectedLead.priority}</span>
+                            </p>
+                            <p>
+                              <strong>Auto-Reply Sent:</strong> {selectedLead.autoReplyText}
+                            </p>
                           </div>
                         </div>
-                      </CardContent>
-                    </Card>
-                  ) : null}
+                      </div>
+                    </CardContent>
+                  </Card>
 
-                  {/* Messages */}
+                  {/* Message History (Simulated) */}
                   <div className="space-y-4 min-h-[300px] max-h-[400px] overflow-y-auto">
-                    {(selectedConversation.messages ?? []).length === 0 ? (
-                      <div className="text-sm text-muted-foreground">No messages in this conversation yet.</div>
+                    {leadMessages.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No messages in this lead record.</div>
                     ) : (
-                      (selectedConversation.messages ?? []).map((message) => (
+                      leadMessages.map((message) => (
                         <div key={message.id} className={`flex ${message.sender === "consultant" ? "justify-end" : "justify-start"}`}>
                           <div
                             className={`p-3 rounded-lg max-w-[80%] ${
@@ -567,26 +511,27 @@ export default function MessagingPage() {
                     )}
                   </div>
 
-                  {/* Message Input */}
+                  {/* Message Input for Follow-up */}
                   <div className="flex gap-2">
                     <Input
-                      placeholder="Type your message..."
+                      placeholder="Send a direct follow-up message..."
                       value={messageInput}
                       onChange={(e) => setMessageInput(e.target.value)}
                       onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
                       className="flex-1"
                     />
                     <Button onClick={handleSendMessage}>
-                      <Send className="h-4 w-4" />
+                      <Send className="h-4 w-4 mr-2" />
+                      Send
                     </Button>
                   </div>
                 </div>
               ) : (
                 <div className="flex items-center justify-center h-[400px] text-muted-foreground">
                   <div className="text-center">
-                    <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p className="text-lg font-medium mb-2">Welcome to your Unified Inbox</p>
-                    <p className="text-sm">Select a conversation to start messaging across all platforms</p>
+                    <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p className="text-lg font-medium mb-2">Focus on Qualified Leads</p>
+                    <p className="text-sm">Select a lead from the list to view the summary and send a follow-up.</p>
                   </div>
                 </div>
               )}
