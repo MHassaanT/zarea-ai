@@ -65,7 +65,7 @@ export default function LandingPage() {
             7-Day Free Trial • No Credit Card Required
           </Badge>
           <h1 className="font-heading font-bold text-4xl md:text-6xl text-balance mb-6 text-foreground">
-            AI-Powered Assistant for <span className="text-primary">Immigration Consultants</span>
+            AI-Powered Assistant for <span className="text-primary">Legal Practices</span>
           </h1>
           <p className="text-xl text-muted-foreground text-pretty mb-8 leading-relaxed">
             Streamline client communication, automate FAQs, capture leads, and manage your practice efficiently. Save
